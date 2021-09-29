@@ -16,8 +16,6 @@ void ReadAnalogs(bool forceRead = false);
 #define IR_DATA_VOL_MINUS 0x34346897
 
 int deadband;
-int react;
-int audio;
 byte audiocounter = 0; // counts number of consecutive loud sounds detected
 byte loudercounter = 0;
 byte volcounter = 0;   // count number of times the volume has been decreased
@@ -28,7 +26,6 @@ bool trig = 0;           // first trigger of a loud/quiet part detected
 bool lowertrig = 0;      // a (long) loud part confirmed
 bool lowertrigtimer = 0;
 bool volup = 0;
-byte i = 0;
 
 void setup()
 {
@@ -69,9 +66,6 @@ void PrintSerialData()
         Serial.println(511 - deadband);
     }
 }
-
-unsigned long PrevVolPlus = 0;
-unsigned long PrevVolMinus = 0;
 
 /*
     since the function that were called by interrupts are now called periodically from the main code flow
@@ -138,17 +132,14 @@ bool DetectLongPeriodOfVolumeBackToQuiet(int audio) // actually too quiet
 
 void RestoreVolumeToOriginalValue()
 {
-    while (i < volcounter)
+    for (;volcounter;volcounter--)
     {
         IrSender.sendSAMSUNG(IR_DATA_VOL_PLUS, 32); // Vol+
         digitalWrite(PIN_PLUS_LED, HIGH);
-        i++;
         YieldDelay(200);
         digitalWrite(PIN_PLUS_LED, LOW);
     }
     volup = 0;
-    i = 0;
-    volcounter = 0;
     loudercounter = 0;
 }
 
@@ -171,7 +162,7 @@ void loop()
     React();                       // done every 16ms - 32ms
     DetectLongPeriodOfLoudSound(); // detects that audioucounter (number of loud sounds) is more than 10
 
-    audio = analogRead(PIN_AUDIO);
+    auto audio = analogRead(PIN_AUDIO);
 
     if (AudioOutOfDeadBandRoutine(audio)) // decide what to do when audio is out of dead band
         LowerTheVolume();

@@ -18,14 +18,14 @@ void ReadAnalogs(bool forceRead = false);
 int deadband;
 int react;
 int audio;
-byte audiocounter = 0;
+byte audiocounter = 0; // counts number of consecutive loud sounds detected
 byte loudercounter = 0;
-byte volcounter = 0;
-byte timercounter = 0;
+byte volcounter = 0; // count number of times the volume has been decreased
+byte timercounter = 0; // debounce variable, used to count 6 cycle of trig
 byte timercountervol = 0;
-byte silencecounter = 0;
-bool trig = 0;
-bool lowertrig = 0;
+byte silencecounter = 0; // counts number of cycles without a trigger, used to reset detection of loud part
+bool trig = 0; // first trigger of a loud/quiet part detected
+bool lowertrig = 0; // a (long) loud part confirmed
 bool lowertrigtimer = 0;
 bool volup = 0;
 byte i = 0;
@@ -115,68 +115,91 @@ void YieldDelay(unsigned long ms)
     }
 }
 
+void DetectLongPeriodOfLoudSound()
+{
+    if (audiocounter > 10)
+    {
+        lowertrig = 1;
+        audiocounter = 0;
+    }
+}
+
+bool AudioOutOfDeadBandRoutine(int audio)
+{
+    if ((audio > (511 + deadband)) || (audio < (511 - deadband))) // audio is out of deadband
+    {
+        // audio volume was fine until it wasn't (we detected a new loud part)
+        if ((trig == 0) && (lowertrig == 0) && (volup == 0 /* volume was inside deadband because no vol- was sent */))
+        {
+            DelayReact();
+            trig = 1;
+        }
+        return (lowertrig == 1);
+    }
+    return 0;
+}
+
+bool DetectLongPeriodOfVolumeBackToQuiet(int audio) // actually too quiet
+{
+    // volume was loud until it wasn't
+    if ((volup == 1 /* volume was out of deadband because a vol- was sent */) && (audio < 540) && (audio > 480) && (trig == 0 /* no trigger => first trigger */))
+    {
+        DelayReact();
+        trig = 1;
+    }
+
+    if ((volup == 1) && ((audio > 540) || (audio < 480))) // never mind, still loud
+    {
+        loudercounter = 0;
+    }
+    return (loudercounter > 20);
+}
+
+
+void RestoreVolumeToOriginalValue()
+{
+    while (i < volcounter)
+    {
+        IrSender.sendSAMSUNG(IR_DATA_VOL_PLUS, 32); // Vol+
+        digitalWrite(PIN_PLUS_LED, HIGH);
+        i++;
+        YieldDelay(200);
+        digitalWrite(PIN_PLUS_LED, LOW);
+    }
+    volup = 0;
+    i = 0;
+    volcounter = 0;
+    loudercounter = 0;
+}
+
+void LowerTheVolume()
+{
+    volcounter++;
+    IrSender.sendSAMSUNG(IR_DATA_VOL_MINUS, 32); //Vol-
+    digitalWrite(PIN_MINUS_LED, HIGH);
+    YieldDelay(200);
+    digitalWrite(PIN_MINUS_LED, LOW);
+    lowertrigtimer = 1;
+}
+
 void loop()
 {
     ReadAnalogs(); // done every 1000ms
     
     PrintSerialData(); // done every 200ms
 
-    React(); // done every 16ms - 32ms    
-
-    if (audiocounter > 10)
-    {
-        lowertrig = 1;
-        audiocounter = 0;
-    }
-
-    if (loudercounter > 20)
-    {
-        while (i < volcounter)
-        {
-            IrSender.sendSAMSUNG(IR_DATA_VOL_PLUS, 32); // Vol+
-            digitalWrite(PIN_PLUS_LED, HIGH);
-            i++;
-            YieldDelay(1000);
-            digitalWrite(PIN_PLUS_LED, LOW);
-        }
-        volup = 0;
-        i = 0;
-        volcounter = 0;
-        loudercounter = 0;
-    }
+    React(); // done every 16ms - 32ms
+    DetectLongPeriodOfLoudSound(); // detects that audioucounter (number of loud sounds) is more than 10
+    
 
     audio = analogRead(PIN_AUDIO);
 
-    if ((volup == 1) && (audio < 540) && (audio > 480) && (trig == 0))
-    {
-        // TCNT2 = 0; // delay the next "Reaction"
-        DelayReact();
-        trig = 1;
-    }
+    if (AudioOutOfDeadBandRoutine(audio)) // decide what to do when audio is out of dead band
+        LowerTheVolume();
 
-    if ((volup == 1) && ((audio > 540) || (audio < 480)))
-    {
-        loudercounter = 0;
-    }
-
-    if ((audio > (511 + deadband)) || (audio < (511 - deadband)))
-    {
-        if ((trig == 0) && (lowertrig == 0) && (volup == 0))
-        {
-            // TCNT2 = 0; // delay the next "Reaction"
-            DelayReact();
-            trig = 1;
-        }
-        if (lowertrig == 1)
-        {
-            volcounter++;
-            IrSender.sendSAMSUNG(IR_DATA_VOL_MINUS, 32); //Vol-
-            digitalWrite(PIN_MINUS_LED, HIGH);
-            YieldDelay(200);
-            digitalWrite(PIN_MINUS_LED, LOW);
-            lowertrigtimer = 1;
-        }
-    }
+    if (DetectLongPeriodOfVolumeBackToQuiet(audio))    
+        RestoreVolumeToOriginalValue();
+        
 }
 
 unsigned long ReactDelay = 0;
@@ -203,6 +226,46 @@ void ReadAnalogs(bool forceRead = false)
     }
 }
 
+
+void DetectLongCrossDeadBand()
+{
+    if (trig == 1) // when audio is out of deadband (loud sound) or returned inside deadband after a loud part,
+                   // increments the timercounter (reprensets how many cylces the trig was 1) and reset the silencecounter
+                   // this code is like a debounce to avoid reading multiple successive deadband cross
+    {
+        timercounter++;
+        silencecounter = 0;
+    }
+
+    // if timercounter (a.k.a the number of cycles since trig was set to 1 ) exceeds 6, register as audiocounter (or loudercounter)
+    // then reset trig and timercounter (to wait for another loud sound to trigger)
+
+    if ((timercounter > 6))
+    {
+        if (volup) // volume was detected loud, "timercounter" counted the number of time the volume returned inside the deadband
+            loudercounter++; // increase counter of how many consecutive quiet part we got
+        else // volume wasn't loud, "timercounter" counted the number of time the volume went outside of the deadband
+            audiocounter++; // increase counter of how many loud parts we got
+        timercounter = 0;
+        trig = 0;
+    }
+}
+
+void DetectSilence()
+{    
+    if (/*(audiocounter > 0) &&*/ !trig) // if no trigger appears after 50 cycels audicounter (counter of loud sounds) is reset
+    {
+        // ^ checking that (audiocounter > 0) seems redundant since it's going to be reset anyway
+        silencecounter++;
+        if (silencecounter > 50)
+        {
+            audiocounter = 0;
+            silencecounter = 0;
+        }
+    }
+}
+
+
 void React()
 {
     auto now = millis();
@@ -211,41 +274,18 @@ void React()
         return;        
     PrevReact = now;
 
-    if (trig == 1)
-    {
-        timercounter++;
-        silencecounter = 0;
-    }
-    if ((timercounter > 6) && (volup == 0))
-    {
-        audiocounter++;
-        timercounter = 0;
-        trig = 0;
-    }
+    DetectLongCrossDeadBand();
 
-    if ((timercounter > 6) && (volup == 1))
-    {
-        loudercounter++;
-        timercounter = 0;
-        trig = 0;
-    }
+    DetectSilence();
+    
 
-    if ((audiocounter > 0) && (trig == 0))
+    if (lowertrig == 1) // a (long) loud part confirmed
     {
-        silencecounter++;
-        if (silencecounter > 50)
-        {
-            audiocounter = 0;
-            silencecounter = 0;
-        }
-    }
-    if (lowertrig == 1)
-    {
-        if (lowertrigtimer == 0)
+        if (!lowertrigtimer) // a vol- should have been sent but wasn't
         {
             timercountervol++;
         }
-        if (lowertrigtimer == 1)
+        else // vol- sent, reset 
         {
             timercountervol = 0;
             lowertrigtimer = 0;

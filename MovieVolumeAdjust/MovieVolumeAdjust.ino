@@ -20,12 +20,12 @@ int react;
 int audio;
 byte audiocounter = 0; // counts number of consecutive loud sounds detected
 byte loudercounter = 0;
-byte volcounter = 0; // count number of times the volume has been decreased
+byte volcounter = 0;   // count number of times the volume has been decreased
 byte timercounter = 0; // debounce variable, used to count 6 cycle of trig
 byte timercountervol = 0;
 byte silencecounter = 0; // counts number of cycles without a trigger, used to reset detection of loud part
-bool trig = 0; // first trigger of a loud/quiet part detected
-bool lowertrig = 0; // a (long) loud part confirmed
+bool trig = 0;           // first trigger of a loud/quiet part detected
+bool lowertrig = 0;      // a (long) loud part confirmed
 bool lowertrigtimer = 0;
 bool volup = 0;
 byte i = 0;
@@ -33,19 +33,6 @@ byte i = 0;
 void setup()
 {
     Serial.begin(250000);
-    // sbi(ADCSRA, ADPS2);
-    // cbi(ADCSRA, ADPS1);
-    // cbi(ADCSRA, ADPS0);
-    // TCCR1A = 0;
-    // TCCR1B = 0;
-    // TCCR1B |= (1 << CS12) | (1 << WGM12);
-    // TIMSK1 |= (1 << OCIE1A);
-    // OCR1A = 31250;
-    // TCCR2A = 0;
-    // TCCR2B = 0;
-    // TCCR2A |= (1 << WGM21);
-    // TCCR2B |= (1 << CS20) | (1 << CS21) | (1 << CS22);
-    // TIMSK2 |= (1 << OCIE2A);
 
     IrSender.begin(PIN_IR_LED, DISABLE_LED_FEEDBACK); //IR LED
     pinMode(PIN_UNDERVOLTAGE_LED, OUTPUT);            //Status
@@ -61,11 +48,7 @@ void setup()
     digitalWrite(PIN_MINUS_LED, LOW);
     digitalWrite(PIN_PLUS_LED, LOW);
 
-    // deadband = map(analogRead(PIN_DEADBAND), 0, 1023, 511, 0);
-    // OCR2A = map(analogRead(PIN_REACT), 1023, 0, 255, 127);
-
     ReadAnalogs(true);
-
 }
 
 unsigned long PrevPrintSerial = 0;
@@ -87,8 +70,6 @@ void PrintSerialData()
     }
 }
 
-
-
 unsigned long PrevVolPlus = 0;
 unsigned long PrevVolMinus = 0;
 
@@ -108,7 +89,7 @@ void YieldDelay(unsigned long ms)
     while (millis() < (now + ms))
     {
         ReadAnalogs(); // done every 1000ms
-    
+
         PrintSerialData(); // done every 200ms
 
         React(); // done every 16ms - 32ms
@@ -155,7 +136,6 @@ bool DetectLongPeriodOfVolumeBackToQuiet(int audio) // actually too quiet
     return (loudercounter > 20);
 }
 
-
 void RestoreVolumeToOriginalValue()
 {
     while (i < volcounter)
@@ -185,21 +165,19 @@ void LowerTheVolume()
 void loop()
 {
     ReadAnalogs(); // done every 1000ms
-    
+
     PrintSerialData(); // done every 200ms
 
-    React(); // done every 16ms - 32ms
+    React();                       // done every 16ms - 32ms
     DetectLongPeriodOfLoudSound(); // detects that audioucounter (number of loud sounds) is more than 10
-    
 
     audio = analogRead(PIN_AUDIO);
 
     if (AudioOutOfDeadBandRoutine(audio)) // decide what to do when audio is out of dead band
         LowerTheVolume();
 
-    if (DetectLongPeriodOfVolumeBackToQuiet(audio))    
+    if (DetectLongPeriodOfVolumeBackToQuiet(audio))
         RestoreVolumeToOriginalValue();
-        
 }
 
 unsigned long ReactDelay = 0;
@@ -220,12 +198,10 @@ void ReadAnalogs(bool forceRead = false)
     {
         PrevAnalogRead = now;
         deadband = map(analogRead(PIN_DEADBAND), 0, 1023, 511, 0);
-        // OCR2A = map(analogRead(PIN_REACT), 1023, 0, 255, 127); //200ms - 100ms
         ReactDelay = map(analogRead(PIN_REACT), 1023, 0, 32, 16); // 32ms - 16ms
         digitalWrite(PIN_UNDERVOLTAGE_LED, (analogRead(PIN_UNDERVOLTAGE) < 540));
     }
 }
-
 
 void DetectLongCrossDeadBand()
 {
@@ -242,17 +218,17 @@ void DetectLongCrossDeadBand()
 
     if ((timercounter > 6))
     {
-        if (volup) // volume was detected loud, "timercounter" counted the number of time the volume returned inside the deadband
+        if (volup)           // volume was detected loud, "timercounter" counted the number of time the volume returned inside the deadband
             loudercounter++; // increase counter of how many consecutive quiet part we got
-        else // volume wasn't loud, "timercounter" counted the number of time the volume went outside of the deadband
-            audiocounter++; // increase counter of how many loud parts we got
+        else                 // volume wasn't loud, "timercounter" counted the number of time the volume went outside of the deadband
+            audiocounter++;  // increase counter of how many loud parts we got
         timercounter = 0;
         trig = 0;
     }
 }
 
 void DetectSilence()
-{    
+{
     if (/*(audiocounter > 0) &&*/ !trig) // if no trigger appears after 50 cycels audicounter (counter of loud sounds) is reset
     {
         // ^ checking that (audiocounter > 0) seems redundant since it's going to be reset anyway
@@ -265,19 +241,17 @@ void DetectSilence()
     }
 }
 
-
 void React()
 {
     auto now = millis();
 
-    if (now <(PrevReact + ReactDelay))
-        return;        
+    if (now < (PrevReact + ReactDelay))
+        return;
     PrevReact = now;
 
     DetectLongCrossDeadBand();
 
     DetectSilence();
-    
 
     if (lowertrig == 1) // a (long) loud part confirmed
     {
@@ -285,7 +259,7 @@ void React()
         {
             timercountervol++;
         }
-        else // vol- sent, reset 
+        else // vol- sent, reset
         {
             timercountervol = 0;
             lowertrigtimer = 0;

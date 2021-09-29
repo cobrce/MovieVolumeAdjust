@@ -1,6 +1,6 @@
 {
     "output": "build",
     "board": "arduino:avr:uno",
-    "sketch": "MovieVolumeAdjust.ino",   
+    "sketch": "MovieVolumeAdjust/MovieVolumeAdjust.ino",   
     "port": "COM4"
 }

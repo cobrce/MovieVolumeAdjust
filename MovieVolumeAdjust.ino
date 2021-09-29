@@ -129,9 +129,7 @@ void loop() {
 ISR(TIMER1_COMPA_vect) {
   deadband = map(analogRead(PIN_DEADBAND), 0, 1023, 511, 0);
   OCR2A = map(analogRead(PIN_REACT), 1023, 0, 255, 127); //200ms - 100ms
-  if (analogRead(PIN_UNDERVOLTAGE) < 540) {
-    digitalWrite(PIN_UNDERVOLTAGE_LED, HIGH);
-  }
+  digitalWrite(PIN_UNDERVOLTAGE_LED, (analogRead(PIN_UNDERVOLTAGE) < 540));
 }
 
 ISR(TIMER2_COMPA_vect) {

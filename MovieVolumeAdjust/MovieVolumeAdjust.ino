@@ -16,14 +16,15 @@ void ReadAnalogs(bool forceRead = false);
 #define IR_DATA_VOL_MINUS 0x34346897
 
 int deadband;
-byte volcounter = 0;   // count number of times the volume has been decreased
+byte volcounter = 0; // count number of times the volume has been decreased
 
 class AsyncDelay
 {
-    private:
+private:
     unsigned long startedAt;
     bool running;
-    public:
+
+public:
     AsyncDelay()
     {
         Reset();
@@ -51,10 +52,10 @@ class AsyncDelay
 
 class Counter
 {
-    private:
+private:
     unsigned long currentValue;
 
-    public:
+public:
     Counter()
     {
         Reset();
@@ -102,26 +103,20 @@ void loop()
 /*
     since the function that were called by interrupts are now called periodically from the main code flow
     by making every one record respectively "last time I run" and checking "can I run yet?", we need the 
-    code to be non-blocking (by avoiding waiting for a pin, delay..etc)s
-
-    the most generic approach for a robust/upgradable code is to use finite state machine implementation,
-    but since we know all the functions the should run in "parallal" we keep calling them while the delay 
-    is not done yet.
-
+    code to be non-blocking (by avoiding waiting for a pin, delay..etc)
 */
 void YieldDelay(unsigned long ms)
 {
     auto now = millis();
     while (millis() < (now + ms))
     {
-        ReadAnalogs(); // done every 1000ms
-
+        ReadAnalogs();     // done every 1000ms
         PrintSerialData(); // done every 200ms
     }
 }
 void RestoreVolumeToOriginalValue()
 {
-    for (;volcounter;volcounter--)
+    for (; volcounter; volcounter--)
     {
         IrSender.sendSAMSUNG(IR_DATA_VOL_PLUS, 32); // Vol+
         digitalWrite(PIN_PLUS_LED, HIGH);
@@ -131,7 +126,7 @@ void RestoreVolumeToOriginalValue()
 }
 
 void LowerTheVolume()
-{    
+{
     volcounter++;
     IrSender.sendSAMSUNG(IR_DATA_VOL_MINUS, 32); //Vol-
     digitalWrite(PIN_MINUS_LED, HIGH);
@@ -139,7 +134,7 @@ void LowerTheVolume()
     digitalWrite(PIN_MINUS_LED, LOW);
 }
 
-unsigned long ReactDelay = 0;
+byte ReactDelay = 0;
 #define ANALOG_READ_DELAY_MS 1000
 AsyncDelay ReadAnalogsDelay;
 void ReadAnalogs(bool forceRead = false)
@@ -164,17 +159,17 @@ bool IsQuiet(int audio)
     return ((audio < 540) && (audio > 480));
 }
 
-AsyncDelay  FirstLoudFoundDelay,
-            DetectSilenceDelay,
-            LoudConfirmedDelay,
-            LowerTheVolumeDelay,
-            WaitForSilenceDelay,
-            SilenceFoundDelay;
+AsyncDelay FirstLoudFoundDelay,
+    DetectSilenceDelay,
+    LoudConfirmedDelay,
+    LowerTheVolumeDelay,
+    WaitForSilenceDelay,
+    SilenceFoundDelay;
 
 Counter CycleCounter,
-        LoudCounter,
-        QuietCounter,
-        SilenceCounter;
+    LoudCounter,
+    QuietCounter,
+    SilenceCounter;
 
 enum State
 {
@@ -192,10 +187,10 @@ void MainFMS()
 {
     ReadAnalogs(); // done every 1000ms
 
-    PrintSerialData(); // done every 200ms    
+    PrintSerialData(); // done every 200ms
 
     auto audio = analogRead(PIN_AUDIO);
-    
+
     switch (state)
     {
     case Init: // resets all the timers and counters and immediatly go to next state
@@ -208,7 +203,7 @@ void MainFMS()
 
         CycleCounter.Reset();
         LoudCounter.Reset();
-        QuietCounter.Reset();   // we could use the same counter for QuietCounter and SilenceCounter, but two separate counter are more clear
+        QuietCounter.Reset(); // we could use the same counter for QuietCounter and SilenceCounter, but two separate counter are more clear
         SilenceCounter.Reset();
 
         state = WaitForLoud;
@@ -217,27 +212,28 @@ void MainFMS()
     case WaitForLoud: // wait for a loud sound, the next state counts them.
                       //  if during the wait we get long silent period,
                       // we reset the counter of loud waves
+
         if (DetectSilenceDelay.Reached(ReactDelay)) // every ReactDelay increment the
             if (SilenceCounter.Reached(50))         // SilenceCounter, when reached
                 LoudCounter.Reset();                // we reset the LoudCounter (counter of the number of loud waves found)
-        
+
         if (IsLoud(audio)) // (audio > (511 + deadband)) || (audio < (511 - deadband));
         {
             DetectSilenceDelay.Reset(); // reset delay for silence detection
-            CycleCounter.Reset(); // reset counter of silent cycles found
-            state = LoudFound; // 
+            CycleCounter.Reset();       // reset counter of silent cycles found
+            state = LoudFound;          //
         }
-            
+
         break;
 
     case LoudFound: // a loud wave found from the previous state
                     //we increment the number of times it was found
                     // if it's more than 10 then a loud part confirmed
 
-        // using an AsyncDelay in this case is more dynamic than YieldDelay because 
+        // using an AsyncDelay in this case is more dynamic than YieldDelay because
         // it allows us to update the delay time
         if (!FirstLoudFoundDelay.Reached(ReactDelay)) // we wait for a ReactDelay
-            break;                                    
+            break;
 
         SilenceCounter.Reset(); // a loud wave was found so we reset silent counter
 
@@ -248,7 +244,7 @@ void MainFMS()
             {
                 state = LoudConfirmed; // it's confirmed, loud music
             }
-            else 
+            else
             {
                 state = WaitForLoud; // wait for another one (or maybe the audio returns to silence)
             }
@@ -259,8 +255,8 @@ void MainFMS()
     case LoudConfirmed:
         if (IsLoud(audio)) // it's still loud
         {
-            LowerTheVolume(); // lower the volume
-            CycleCounter.Reset(); // reset the counter of cycles the audio is no more loud
+            LowerTheVolume();           // lower the volume
+            CycleCounter.Reset();       // reset the counter of cycles the audio is no more loud
             LoudConfirmedDelay.Reset(); // reset the delay it takes to confirm a non-loud part
         }
         else if (LoudConfirmedDelay.Reached(ReactDelay)) // we wait for a ReactDelay
@@ -292,7 +288,7 @@ void MainFMS()
                 {
                     state = SilenceConfirmed; // no more music
                 }
-            }        
+            }
         }
         break;
 
@@ -305,13 +301,13 @@ void MainFMS()
 
 #define VarName(var) (#var)
 
-char * StrStates[] = {VarName(Init),
-                      VarName(WaitForLoud),
-                      VarName(LoudFound),
-                      VarName(LoudConfirmed),
-                      VarName(WaitForSilence),
-                      VarName(SilenceFound),
-                      VarName(SilenceConfirmed)};
+char *StrStates[] = {VarName(Init),
+                     VarName(WaitForLoud),
+                     VarName(LoudFound),
+                     VarName(LoudConfirmed),
+                     VarName(WaitForSilence),
+                     VarName(SilenceFound),
+                     VarName(SilenceConfirmed)};
 
 AsyncDelay PrintSerialDataDelay;
 void PrintSerialData()

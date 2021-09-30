@@ -16,16 +16,62 @@ void ReadAnalogs(bool forceRead = false);
 #define IR_DATA_VOL_MINUS 0x34346897
 
 int deadband;
-byte audiocounter = 0; // counts number of consecutive loud sounds detected
-byte loudercounter = 0;
 byte volcounter = 0;   // count number of times the volume has been decreased
-byte timercounter = 0; // debounce variable, used to count 6 cycle of trig
-byte timercountervol = 0;
-byte silencecounter = 0; // counts number of cycles without a trigger, used to reset detection of loud part
-bool trig = 0;           // first trigger of a loud/quiet part detected
-bool lowertrig = 0;      // a (long) loud part confirmed
-bool lowertrigtimer = 0;
-bool volup = 0;
+
+class AsyncDelay
+{
+    private:
+    unsigned long startedAt;
+    bool running;
+    public:
+    AsyncDelay()
+    {
+        Reset();
+    }
+
+    void Reset()
+    {
+        startedAt = 0;
+        running = false;
+    }
+
+    bool Reached(unsigned long ms)
+    {
+        if (!running)
+        {
+            startedAt = millis();
+            running = true;
+        }
+        auto result = (millis() >= startedAt + ms);
+        if (result)
+            Reset();
+        return result;
+    }
+};
+
+class Counter
+{
+    private:
+    unsigned long currentValue;
+
+    public:
+    Counter()
+    {
+        Reset();
+    }
+    void Reset()
+    {
+        currentValue = 0;
+    }
+
+    bool Reached(unsigned long value)
+    {
+        auto result = (++currentValue >= value);
+        if (result)
+            Reset();
+        return result;
+    }
+};
 
 void setup()
 {
@@ -48,23 +94,9 @@ void setup()
     ReadAnalogs(true);
 }
 
-unsigned long PrevPrintSerial = 0;
-void PrintSerialData()
+void loop()
 {
-    auto now = millis();
-    if (!PrevPrintSerial || (now - PrevPrintSerial >= 200))
-    {
-        PrevPrintSerial = now;
-        Serial.print(0);
-        Serial.print(" ");
-        Serial.print(1023);
-        Serial.print(" ");
-        Serial.print(analogRead(PIN_AUDIO));
-        Serial.print(" ");
-        Serial.print(511 + deadband);
-        Serial.print(" ");
-        Serial.println(511 - deadband);
-    }
+    MainFMS();
 }
 
 /*
@@ -85,51 +117,8 @@ void YieldDelay(unsigned long ms)
         ReadAnalogs(); // done every 1000ms
 
         PrintSerialData(); // done every 200ms
-
-        React(); // done every 16ms - 32ms
     }
 }
-
-void DetectLongPeriodOfLoudSound()
-{
-    if (audiocounter > 10)
-    {
-        lowertrig = 1;
-        audiocounter = 0;
-    }
-}
-
-bool AudioOutOfDeadBandRoutine(int audio)
-{
-    if ((audio > (511 + deadband)) || (audio < (511 - deadband))) // audio is out of deadband
-    {
-        // audio volume was fine until it wasn't (we detected a new loud part)
-        if ((trig == 0) && (lowertrig == 0) && (volup == 0 /* volume was inside deadband because no vol- was sent */))
-        {
-            DelayReact();
-            trig = 1;
-        }
-        return (lowertrig == 1);
-    }
-    return 0;
-}
-
-bool DetectLongPeriodOfVolumeBackToQuiet(int audio) // actually too quiet
-{
-    // volume was loud until it wasn't
-    if ((volup == 1 /* volume was out of deadband because a vol- was sent */) && (audio < 540) && (audio > 480) && (trig == 0 /* no trigger => first trigger */))
-    {
-        DelayReact();
-        trig = 1;
-    }
-
-    if ((volup == 1) && ((audio > 540) || (audio < 480))) // never mind, still loud
-    {
-        loudercounter = 0;
-    }
-    return (loudercounter > 20);
-}
-
 void RestoreVolumeToOriginalValue()
 {
     for (;volcounter;volcounter--)
@@ -139,126 +128,206 @@ void RestoreVolumeToOriginalValue()
         YieldDelay(200);
         digitalWrite(PIN_PLUS_LED, LOW);
     }
-    volup = 0;
-    loudercounter = 0;
 }
 
 void LowerTheVolume()
-{
+{    
     volcounter++;
     IrSender.sendSAMSUNG(IR_DATA_VOL_MINUS, 32); //Vol-
     digitalWrite(PIN_MINUS_LED, HIGH);
     YieldDelay(200);
     digitalWrite(PIN_MINUS_LED, LOW);
-    lowertrigtimer = 1;
-}
-
-void loop()
-{
-    ReadAnalogs(); // done every 1000ms
-
-    PrintSerialData(); // done every 200ms
-
-    React();                       // done every 16ms - 32ms
-    DetectLongPeriodOfLoudSound(); // detects that audioucounter (number of loud sounds) is more than 10
-
-    auto audio = analogRead(PIN_AUDIO);
-
-    if (AudioOutOfDeadBandRoutine(audio)) // decide what to do when audio is out of dead band
-        LowerTheVolume();
-
-    if (DetectLongPeriodOfVolumeBackToQuiet(audio))
-        RestoreVolumeToOriginalValue();
 }
 
 unsigned long ReactDelay = 0;
-unsigned long PrevReact = 0;
-
-void DelayReact()
-{
-    PrevReact = millis() + ReactDelay;
-}
-
 #define ANALOG_READ_DELAY_MS 1000
-unsigned long PrevAnalogRead = 0;
+AsyncDelay ReadAnalogsDelay;
 void ReadAnalogs(bool forceRead = false)
 {
     auto now = millis();
 
-    if (forceRead || (now - PrevAnalogRead >= ANALOG_READ_DELAY_MS))
+    if (forceRead || ReadAnalogsDelay.Reached(ANALOG_READ_DELAY_MS))
     {
-        PrevAnalogRead = now;
         deadband = map(analogRead(PIN_DEADBAND), 0, 1023, 511, 0);
         ReactDelay = map(analogRead(PIN_REACT), 1023, 0, 32, 16); // 32ms - 16ms
         digitalWrite(PIN_UNDERVOLTAGE_LED, (analogRead(PIN_UNDERVOLTAGE) < 540));
     }
 }
 
-void DetectLongCrossDeadBand()
+bool IsLoud(int audio)
 {
-    if (trig == 1) // when audio is out of deadband (loud sound) or returned inside deadband after a loud part,
-                   // increments the timercounter (reprensets how many cylces the trig was 1) and reset the silencecounter
-                   // this code is like a debounce to avoid reading multiple successive deadband cross
-    {
-        timercounter++;
-        silencecounter = 0;
-    }
+    return (audio > (511 + deadband)) || (audio < (511 - deadband));
+}
 
-    // if timercounter (a.k.a the number of cycles since trig was set to 1 ) exceeds 6, register as audiocounter (or loudercounter)
-    // then reset trig and timercounter (to wait for another loud sound to trigger)
+bool IsQuiet(int audio)
+{
+    return ((audio < 540) && (audio > 480));
+}
 
-    if ((timercounter > 6))
+AsyncDelay  FirstLoudFoundDelay,
+            DetectSilenceDelay,
+            LoudConfirmedDelay,
+            LowerTheVolumeDelay,
+            WaitForSilenceDelay,
+            SilenceFoundDelay;
+
+Counter CycleCounter,
+        LoudCounter,
+        QuietCounter,
+        SilenceCounter;
+
+enum State
+{
+    Init,
+    WaitForLoud,
+    LoudFound,
+    LoudConfirmed,
+    WaitForSilence,
+    SilenceFound,
+    SilenceConfirmed
+};
+State state = Init;
+
+void MainFMS()
+{
+    ReadAnalogs(); // done every 1000ms
+
+    PrintSerialData(); // done every 200ms    
+
+    auto audio = analogRead(PIN_AUDIO);
+    
+    switch (state)
     {
-        if (volup)           // volume was detected loud, "timercounter" counted the number of time the volume returned inside the deadband
-            loudercounter++; // increase counter of how many consecutive quiet part we got
-        else                 // volume wasn't loud, "timercounter" counted the number of time the volume went outside of the deadband
-            audiocounter++;  // increase counter of how many loud parts we got
-        timercounter = 0;
-        trig = 0;
+    case Init: // resets all the timers and counters and immediatly go to next state
+        FirstLoudFoundDelay.Reset();
+        DetectSilenceDelay.Reset();
+        LoudConfirmedDelay.Reset();
+        LowerTheVolumeDelay.Reset();
+        WaitForSilenceDelay.Reset();
+        SilenceFoundDelay.Reset();
+
+        CycleCounter.Reset();
+        LoudCounter.Reset();
+        QuietCounter.Reset();   // we could use the same counter for QuietCounter and SilenceCounter, but two separate counter are more clear
+        SilenceCounter.Reset();
+
+        state = WaitForLoud;
+        break;
+
+    case WaitForLoud: // wait for a loud sound, the next state counts them.
+                      //  if during the wait we get long silent period,
+                      // we reset the counter of loud waves
+        if (DetectSilenceDelay.Reached(ReactDelay)) // every ReactDelay increment the
+            if (SilenceCounter.Reached(50))         // SilenceCounter, when reached
+                LoudCounter.Reset();                // we reset the LoudCounter (counter of the number of loud waves found)
+        
+        if (IsLoud(audio)) // (audio > (511 + deadband)) || (audio < (511 - deadband));
+        {
+            DetectSilenceDelay.Reset(); // reset delay for silence detection
+            CycleCounter.Reset(); // reset counter of silent cycles found
+            state = LoudFound; // 
+        }
+            
+        break;
+
+    case LoudFound: // a loud wave found from the previous state
+                    //we increment the number of times it was found
+                    // if it's more than 10 then a loud part confirmed
+
+        // using an AsyncDelay in this case is more dynamic than YieldDelay because 
+        // it allows us to update the delay time
+        if (!FirstLoudFoundDelay.Reached(ReactDelay)) // we wait for a ReactDelay
+            break;                                    
+
+        SilenceCounter.Reset(); // a loud wave was found so we reset silent counter
+
+        // to make things easy : 1 wave = 6 cycles, 1 cycle = 1 ReactDelay
+        if (CycleCounter.Reached(6)) // if it's the 6th cycle then..
+        {
+            if (LoudCounter.Reached(10)) // we increment the counter of loud waves, if it's 10 then..
+            {
+                state = LoudConfirmed; // it's confirmed, loud music
+            }
+            else 
+            {
+                state = WaitForLoud; // wait for another one (or maybe the audio returns to silence)
+            }
+        }
+
+        break;
+
+    case LoudConfirmed:
+        if (IsLoud(audio)) // it's still loud
+        {
+            LowerTheVolume(); // lower the volume
+            CycleCounter.Reset(); // reset the counter of cycles the audio is no more loud
+            LoudConfirmedDelay.Reset(); // reset the delay it takes to confirm a non-loud part
+        }
+        else if (LoudConfirmedDelay.Reached(ReactDelay)) // we wait for a ReactDelay
+        {
+            if (CycleCounter.Reached(100)) // if we left the loud part (because we sent Vol-) for more than 100 cycles then...
+            {
+                state = WaitForSilence; // go to the state of waiting for a quiet part (dialog)
+            }
+        }
+        break;
+
+    case WaitForSilence:
+        if (IsQuiet(audio)) // ((audio < 540) && (audio > 480));
+            state = SilenceFound;
+        break;
+
+    case SilenceFound:
+        if (!IsQuiet(audio)) // still not confirmed that it's a quiet part
+        {
+            CycleCounter.Reset(); // reset the counter of cycles the silence remaind
+            QuietCounter.Reset(); // reset the counter of quiet waves
+            state = WaitForSilence;
+        }
+        else if (SilenceFoundDelay.Reached(ReactDelay))
+        {
+            if (CycleCounter.Reached(6)) // one silent wave, then...
+            {
+                if (QuietCounter.Reached(20)) // increment counter of quiet waves, it' reaches 20..
+                {
+                    state = SilenceConfirmed; // no more music
+                }
+            }        
+        }
+        break;
+
+    case SilenceConfirmed: // left the loud area to quiet one, restore volume then return to init state
+        RestoreVolumeToOriginalValue();
+        state = Init;
+        break;
     }
 }
 
-void DetectSilence()
+#define VarName(var) (#var)
+
+char * StrStates[] = {VarName(Init),
+                      VarName(WaitForLoud),
+                      VarName(LoudFound),
+                      VarName(LoudConfirmed),
+                      VarName(WaitForSilence),
+                      VarName(SilenceFound),
+                      VarName(SilenceConfirmed)};
+
+AsyncDelay PrintSerialDataDelay;
+void PrintSerialData()
 {
-    if (/*(audiocounter > 0) &&*/ !trig) // if no trigger appears after 50 cycels audicounter (counter of loud sounds) is reset
+    if (PrintSerialDataDelay.Reached(200))
     {
-        // ^ checking that (audiocounter > 0) seems redundant since it's going to be reset anyway
-        silencecounter++;
-        if (silencecounter > 50)
-        {
-            audiocounter = 0;
-            silencecounter = 0;
-        }
-    }
-}
+        Serial.print("state:");
 
-void React()
-{
-    auto now = millis();
-
-    if (now < (PrevReact + ReactDelay))
-        return;
-    PrevReact = now;
-
-    DetectLongCrossDeadBand();
-
-    DetectSilence();
-
-    if (lowertrig == 1) // a (long) loud part confirmed
-    {
-        if (!lowertrigtimer) // a vol- should have been sent but wasn't
-        {
-            timercountervol++;
-        }
-        else // vol- sent, reset
-        {
-            timercountervol = 0;
-            lowertrigtimer = 0;
-        }
-        if (timercountervol > 100)
-        {
-            volup = 1;
-            lowertrig = 0;
-        }
+        Serial.print(StrStates[state]);
+        Serial.print(" audio:");
+        Serial.print(analogRead(PIN_AUDIO));
+        Serial.print(" hight:");
+        Serial.print(511 + deadband);
+        Serial.print(" low:");
+        Serial.print(511 - deadband);
+        Serial.print(" volcounter:");
+        Serial.println(volcounter);
     }
 }

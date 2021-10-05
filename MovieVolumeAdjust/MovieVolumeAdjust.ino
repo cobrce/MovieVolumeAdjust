@@ -118,7 +118,8 @@ void RestoreVolumeToOriginalValue()
 {
     for (; volcounter; volcounter--)
     {
-        IrSender.sendSAMSUNG(IR_DATA_VOL_PLUS, 32); // Vol+
+        //IrSender.sendSAMSUNG(IR_DATA_VOL_PLUS, 32); // Vol+
+        IrSender.sendSamsung(0x707,0x7,1); // thanks to roger.tannous for pointing out the new function
         digitalWrite(PIN_PLUS_LED, HIGH);
         YieldDelay(200);
         digitalWrite(PIN_PLUS_LED, LOW);
@@ -128,7 +129,8 @@ void RestoreVolumeToOriginalValue()
 void LowerTheVolume()
 {
     volcounter++;
-    IrSender.sendSAMSUNG(IR_DATA_VOL_MINUS, 32); //Vol-
+    // IrSender.sendSAMSUNG(IR_DATA_VOL_MINUS, 32); //Vol-
+    IrSender.sendSamsung(0x707,0xb,1); // thanks to roger.tannous for pointing out the new function
     digitalWrite(PIN_MINUS_LED, HIGH);
     YieldDelay(200);
     digitalWrite(PIN_MINUS_LED, LOW);
